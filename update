@@ -1,0 +1,63 @@
+#! /bin/bash
+
+while getopts "uprsv" name
+do
+	case $name in
+		u)
+			update=1 ;;
+		r)
+			reboot=1 ;;
+		s)
+			shutdown=1 ;;
+		v)
+			verbose=v ;;
+		p)
+			pretend=p ;;
+	esac
+done
+
+echo -n '[+] Updating portage tree'
+{
+	git fetch upstream && \
+	git fetch origin && \
+	git checkout master && \
+	git pull && \
+	git merge upstream/master && \
+	egencache --update --repo=gentoo --jobs=1 && \
+	git add metadata/md5-cache && git commit -m "kobboi: update metadata cache" && \
+	eix-update
+} > /dev/null 2>&1 && echo ' [OK]' || echo ' [NOK]'
+echo '[+] Updating GLSA tree'
+{
+	cd ../glsa
+	git pull
+	cd -
+} > /dev/null 2>&1
+echo -n '[+] Updating Linux kernel sources'
+{
+	cd /usr/src/linux
+	sudo git pull --ff-only
+	cd -
+} > /dev/null 2>&1
+echo " ($(git --git-dir=/usr/src/linux/.git describe), running $(uname -r))"
+if [ -n "$update" ]
+then
+echo '[+] Updating packages'
+{
+	sudo emerge -kuDN$pretend$verbose @world --jobs=4 --keep-going --with-bdeps=y --complete-graph --quiet-fail --quiet --quiet-build
+}
+echo '[+] Reverse dependency rebuilding'
+{
+	sudo emerge @preserved-rebuild --quiet-fail --keep-going --quiet --quiet-build
+}
+echo '[+] Depcleaning'
+{
+	sudo emerge --depclean --quiet-fail --with-bdeps=y --quiet --quiet-build
+}
+else
+echo '[-] Skipping package updates'
+fi
+
+glsa-check -t all
+[ -n "$reboot" ] && sudo reboot
+[ -n "$shutdown" ] && sudo shutdown -Ph now
